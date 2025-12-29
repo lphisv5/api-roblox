@@ -1,5 +1,5 @@
 import axios from "axios";
-import cheerio from "cheerio";
+import { load } from "cheerio";
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import tz from "dayjs/plugin/timezone.js";
@@ -20,7 +20,7 @@ export async function fetchRobloxStatus(timezone = "Asia/Bangkok") {
     headers: { "User-Agent": "Roblox-Status-API" }
   });
 
-  const $ = cheerio.load(html);
+  const $ = load(html);
 
   let totalScore = 0;
   let totalServices = 0;
