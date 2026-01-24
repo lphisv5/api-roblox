@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { load } from 'cheerio';
+import * as cheerio from 'cheerio';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
@@ -8,8 +8,6 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const STATUS_URL = 'https://status.roblox.com/';
-const CACHE_TTL = 60000;
-
 const STATUS_WEIGHT = {
   'Operational': 100,
   'Degraded Performance': 90,
@@ -18,49 +16,42 @@ const STATUS_WEIGHT = {
   'Major Outage': 20
 };
 
-const VALID_TIMEZONES = [
-  'Asia/Bangkok',
-  'America/New_York', 
-  'America/Los_Angeles',
-  'Europe/London',
-  'Asia/Tokyo',
-  'Australia/Sydney',
-  'UTC'
-];
+export default async function handler(req, res) {
+  // Set CORS headers
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
-let cache = null;
-let cacheTime = 0;
-
-async function fetchWithRetry(url, retries = 2) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      const response = await axios.get(url, {
-        timeout: 8000,
-        headers: {
-          'User-Agent': 'Roblox-Status-API/2.0',
-          'Accept': 'text/html'
-        }
-      });
-      return response;
-    } catch (error) {
-      if (i === retries) throw error;
-      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
-    }
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
   }
-}
 
-async function fetchRobloxStatus(tz) {
-  const startTime = Date.now();
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
 
   try {
-    const { data: html } = await fetchWithRetry(STATUS_URL);
-    const $ = load(html);
+    const tz = req.query.tz || 'Asia/Bangkok';
+    
+    // Fetch HTML
+    const response = await axios.get(STATUS_URL, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; RobloxStatusAPI/2.0)',
+      }
+    });
 
+    const $ = cheerio.load(response.data);
+
+    // Parse components
     const components = [];
     $('.component').each((_, el) => {
       const name = $(el).find('.name').text().trim();
       const status = $(el).find('.component-status').text().trim();
-
+      
       if (name && status) {
         components.push({
           name,
@@ -70,27 +61,22 @@ async function fetchRobloxStatus(tz) {
       }
     });
 
-    let totalScore = 0;
-    let totalServices = 0;
-    components.forEach(c => {
-      totalScore += c.weight;
-      totalServices++;
-    });
+    // Calculate health
+    const totalScore = components.reduce((sum, c) => sum + c.weight, 0);
+    const healthPercent = components.length > 0 
+      ? Math.round(totalScore / components.length) 
+      : 100;
 
-    const rawPercent = totalServices > 0 ? Math.round(totalScore / totalServices) : 100;
-    const healthPercent = Math.max(20, Math.min(100, rawPercent));
+    // Check incidents
+    const hasIncidents = $('.unresolved-incident').length > 0;
+    const incidentCount = hasIncidents ? $('.unresolved-incident').length : 0;
 
-    const hasActiveIncidents = $('.unresolved-incident').length > 0;
-    const pageStatus = $('.page-status').text().toLowerCase();
-    const hasStatusAlert = pageStatus.includes('outage') || pageStatus.includes('disruption');
-    const incidentActive = hasActiveIncidents || hasStatusAlert;
-    const incidentCount = hasActiveIncidents ? $('.unresolved-incident').length : 0;
-
+    // Determine status
     let statusText = 'All Systems Operational';
     let statusEmoji = '🟢';
     let statusState = 'operational';
 
-    if (incidentActive || healthPercent < 80) {
+    if (hasIncidents || healthPercent < 80) {
       statusText = 'Service Disruption';
       statusEmoji = '🟠';
       statusState = 'partial';
@@ -100,10 +86,14 @@ async function fetchRobloxStatus(tz) {
       statusState = 'degraded';
     }
 
+    // Format timestamp
     const nowUtc = dayjs.utc();
     const local = nowUtc.tz(tz);
 
-    return {
+    const result = {
+      cached: false,
+      title: 'Roblox System Status',
+      icon: '📡',
       status: {
         text: statusText,
         emoji: statusEmoji,
@@ -116,9 +106,9 @@ async function fetchRobloxStatus(tz) {
       },
       components,
       incidents: {
-        active: incidentActive,
+        active: hasIncidents,
         count: incidentCount,
-        message: incidentActive 
+        message: hasIncidents 
           ? `${incidentCount} active incident(s) detected`
           : 'No active incidents detected'
       },
@@ -131,87 +121,18 @@ async function fetchRobloxStatus(tz) {
       },
       meta: {
         official: true,
-        source: STATUS_URL,
-        scrapeDuration: Date.now() - startTime
+        source: STATUS_URL
       }
     };
-  } catch (error) {
-    console.error('Fetch error:', error.message);
-    throw new Error('Failed to fetch Roblox status: ' + error.message);
-  }
-}
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=30');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  if (req.method !== 'GET') {
-    return res.status(405).json({
-      error: 'METHOD_NOT_ALLOWED',
-      message: 'Only GET requests are allowed'
-    });
-  }
-
-  try {
-    const tz = req.query.tz || 'Asia/Bangkok';
-    const refresh = req.query.refresh === 'true';
-
-    if (!VALID_TIMEZONES.includes(tz)) {
-      return res.status(400).json({
-        error: 'INVALID_TIMEZONE',
-        message: `Invalid timezone. Valid options: ${VALID_TIMEZONES.join(', ')}`,
-        validTimezones: VALID_TIMEZONES
-      });
-    }
-
-    const now = Date.now();
-
-    if (!refresh && cache && (now - cacheTime < CACHE_TTL)) {
-      const cachedResponse = {
-        cached: true,
-        cacheAge: Math.floor((now - cacheTime) / 1000),
-        title: 'Roblox System Status',
-        icon: '📡',
-        ...cache
-      };
-
-      const nowUtc = dayjs.utc();
-      const local = nowUtc.tz(tz);
-      cachedResponse.updated = {
-        time: local.format('HH:mm'),
-        timezone: tz === 'Asia/Bangkok' ? 'TH' : tz,
-        full: local.format('YYYY-MM-DD HH:mm:ss'),
-        iso: nowUtc.toISOString(),
-        unix: nowUtc.unix()
-      };
-
-      return res.status(200).json(cachedResponse);
-    }
-
-    const data = await fetchRobloxStatus(tz);
-    cache = data;
-    cacheTime = now;
-
-    return res.status(200).json({
-      cached: false,
-      title: 'Roblox System Status',
-      icon: '📡',
-      ...data
-    });
+    res.status(200).json(result);
 
   } catch (error) {
-    console.error('Handler error:', error);
-
-    return res.status(502).json({
+    console.error('Error:', error.message);
+    res.status(502).json({
       error: 'BAD_GATEWAY',
-      message: error.message,
-      timestamp: new Date().toISOString()
+      message: 'Failed to fetch Roblox status',
+      details: error.message
     });
   }
 }
