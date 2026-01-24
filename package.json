@@ -1,16 +1,33 @@
 {
   "name": "roblox-status-api",
-  "version": "1.0.0",
-  "description": "Roblox System Status API (Official Source)",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Production-ready Roblox System Status API for Vercel",
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "dev": "vercel dev",
+    "build": "echo 'No build step required'",
+    "deploy": "vercel --prod"
   },
+  "keywords": [
+    "roblox",
+    "status",
+    "api",
+    "monitoring",
+    "vercel",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "axios": "^1.6.7",
+    "axios-retry": "^4.0.0",
     "cheerio": "^1.0.0-rc.12",
-    "dayjs": "^1.11.10",
-    "express": "^4.19.2"
+    "dayjs": "^1.11.10"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
