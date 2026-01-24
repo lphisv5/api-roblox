@@ -3,13 +3,12 @@ import { load } from 'cheerio';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
-import axiosRetry from 'axios-retry';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const STATUS_URL = 'https://status.roblox.com/';
-const CACHE_TTL = 60000; // 60 seconds
+const CACHE_TTL = 60000;
 
 const STATUS_WEIGHT = {
   'Operational': 100,
@@ -29,47 +28,107 @@ const VALID_TIMEZONES = [
   'UTC'
 ];
 
-// Vercel Edge Cache
 let cache = null;
 let cacheTime = 0;
 
-// Configure axios with retry
-const axiosInstance = axios.create({
-  timeout: 8000,
-  headers: {
-    'User-Agent': 'Roblox-Status-API/2.0',
-    'Accept': 'text/html'
+async function fetchWithRetry(url, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 8000,
+        headers: {
+          'User-Agent': 'Roblox-Status-API/2.0',
+          'Accept': 'text/html'
+        }
+      });
+      return response;
+    } catch (error) {
+      if (i === retries) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
+    }
   }
-});
-
-axiosRetry(axiosInstance, {
-  retries: 2,
-  retryDelay: (retryCount) => retryCount * 500,
-  retryCondition: (error) => {
-    return axiosRetry.isNetworkOrIdempotentRequestError(error) ||
-           error.code === 'ECONNABORTED';
-  }
-});
+}
 
 async function fetchRobloxStatus(tz) {
   const startTime = Date.now();
 
   try {
-    const { data: html } = await axiosInstance.get(STATUS_URL);
+    const { data: html } = await fetchWithRetry(STATUS_URL);
     const $ = load(html);
 
-    const components = parseComponents($);
-    const health = calculateHealth(components);
-    const incidents = parseIncidents($);
-    const status = determineStatus(health, incidents);
-    const timestamp = formatTimestamp(tz);
+    const components = [];
+    $('.component').each((_, el) => {
+      const name = $(el).find('.name').text().trim();
+      const status = $(el).find('.component-status').text().trim();
+
+      if (name && status) {
+        components.push({
+          name,
+          status,
+          weight: STATUS_WEIGHT[status] || 0
+        });
+      }
+    });
+
+    let totalScore = 0;
+    let totalServices = 0;
+    components.forEach(c => {
+      totalScore += c.weight;
+      totalServices++;
+    });
+
+    const rawPercent = totalServices > 0 ? Math.round(totalScore / totalServices) : 100;
+    const healthPercent = Math.max(20, Math.min(100, rawPercent));
+
+    const hasActiveIncidents = $('.unresolved-incident').length > 0;
+    const pageStatus = $('.page-status').text().toLowerCase();
+    const hasStatusAlert = pageStatus.includes('outage') || pageStatus.includes('disruption');
+    const incidentActive = hasActiveIncidents || hasStatusAlert;
+    const incidentCount = hasActiveIncidents ? $('.unresolved-incident').length : 0;
+
+    let statusText = 'All Systems Operational';
+    let statusEmoji = '🟢';
+    let statusState = 'operational';
+
+    if (incidentActive || healthPercent < 80) {
+      statusText = 'Service Disruption';
+      statusEmoji = '🟠';
+      statusState = 'partial';
+    } else if (healthPercent < 95) {
+      statusText = 'Minor Issues';
+      statusEmoji = '🟡';
+      statusState = 'degraded';
+    }
+
+    const nowUtc = dayjs.utc();
+    const local = nowUtc.tz(tz);
 
     return {
-      status,
-      health,
+      status: {
+        text: statusText,
+        emoji: statusEmoji,
+        state: statusState
+      },
+      health: {
+        percent: healthPercent,
+        emoji: statusEmoji,
+        state: statusState
+      },
       components,
-      incidents,
-      updated: timestamp,
+      incidents: {
+        active: incidentActive,
+        count: incidentCount,
+        message: incidentActive 
+          ? `${incidentCount} active incident(s) detected`
+          : 'No active incidents detected'
+      },
+      updated: {
+        time: local.format('HH:mm'),
+        timezone: tz === 'Asia/Bangkok' ? 'TH' : tz,
+        full: local.format('YYYY-MM-DD HH:mm:ss'),
+        iso: nowUtc.toISOString(),
+        unix: nowUtc.unix()
+      },
       meta: {
         official: true,
         source: STATUS_URL,
@@ -78,125 +137,11 @@ async function fetchRobloxStatus(tz) {
     };
   } catch (error) {
     console.error('Fetch error:', error.message);
-    
-    if (error.code === 'ECONNABORTED') {
-      throw new Error('Request timeout while fetching Roblox status');
-    }
-    
-    throw new Error('Failed to fetch Roblox status from official source');
+    throw new Error('Failed to fetch Roblox status: ' + error.message);
   }
-}
-
-function parseComponents($) {
-  const components = [];
-
-  $('.component').each((_, el) => {
-    const name = $(el).find('.name').text().trim();
-    const status = $(el).find('.component-status').text().trim();
-
-    if (name && status) {
-      components.push({
-        name,
-        status,
-        weight: STATUS_WEIGHT[status] || 0
-      });
-    }
-  });
-
-  return components;
-}
-
-function calculateHealth(components) {
-  if (components.length === 0) {
-    return {
-      percent: 100,
-      emoji: '🟢',
-      state: 'operational'
-    };
-  }
-
-  const totalScore = components.reduce((sum, c) => sum + c.weight, 0);
-  const rawPercent = Math.round(totalScore / components.length);
-  const percent = Math.max(20, Math.min(100, rawPercent));
-
-  return {
-    percent,
-    emoji: getHealthEmoji(percent),
-    state: getHealthState(percent)
-  };
-}
-
-function parseIncidents($) {
-  const hasActiveIncidents = $('.unresolved-incident').length > 0;
-  const pageStatus = $('.page-status').text().toLowerCase();
-  const hasStatusAlert = pageStatus.includes('outage') || 
-                        pageStatus.includes('disruption');
-
-  const active = hasActiveIncidents || hasStatusAlert;
-  const count = hasActiveIncidents ? $('.unresolved-incident').length : 0;
-
-  return {
-    active,
-    count,
-    message: active 
-      ? `${count} active incident(s) detected`
-      : 'No active incidents detected'
-  };
-}
-
-function determineStatus(health, incidents) {
-  if (incidents.active || health.percent < 80) {
-    return {
-      text: 'Service Disruption',
-      emoji: '🟠',
-      state: 'partial'
-    };
-  }
-
-  if (health.percent < 95) {
-    return {
-      text: 'Minor Issues',
-      emoji: '🟡',
-      state: 'degraded'
-    };
-  }
-
-  return {
-    text: 'All Systems Operational',
-    emoji: '🟢',
-    state: 'operational'
-  };
-}
-
-function getHealthEmoji(percent) {
-  if (percent >= 95) return '🟢';
-  if (percent >= 80) return '🟡';
-  if (percent >= 40) return '🟠';
-  return '🔴';
-}
-
-function getHealthState(percent) {
-  if (percent >= 95) return 'operational';
-  if (percent >= 80) return 'degraded';
-  if (percent >= 40) return 'partial';
-  return 'outage';
-}
-
-function formatTimestamp(tz) {
-  const nowUtc = dayjs.utc();
-  const local = nowUtc.tz(tz);
-
-  return {
-    time: local.format('HH:mm'),
-    timezone: tz === 'Asia/Bangkok' ? 'TH' : tz,
-    full: local.format('YYYY-MM-DD HH:mm:ss'),
-    iso: nowUtc.toISOString(),
-    unix: nowUtc.unix()
-  };
 }
 
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -214,9 +159,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { tz = 'Asia/Bangkok', refresh } = req.query;
+    const tz = req.query.tz || 'Asia/Bangkok';
+    const refresh = req.query.refresh === 'true';
 
-    // Validate timezone
     if (!VALID_TIMEZONES.includes(tz)) {
       return res.status(400).json({
         error: 'INVALID_TIMEZONE',
@@ -226,10 +171,8 @@ export default async function handler(req, res) {
     }
 
     const now = Date.now();
-    const forceRefresh = refresh === 'true';
 
-    // Check cache
-    if (!forceRefresh && cache && (now - cacheTime < CACHE_TTL)) {
+    if (!refresh && cache && (now - cacheTime < CACHE_TTL)) {
       const cachedResponse = {
         cached: true,
         cacheAge: Math.floor((now - cacheTime) / 1000),
@@ -238,16 +181,20 @@ export default async function handler(req, res) {
         ...cache
       };
 
-      // Update timestamp for current timezone
-      cachedResponse.updated = formatTimestamp(tz);
+      const nowUtc = dayjs.utc();
+      const local = nowUtc.tz(tz);
+      cachedResponse.updated = {
+        time: local.format('HH:mm'),
+        timezone: tz === 'Asia/Bangkok' ? 'TH' : tz,
+        full: local.format('YYYY-MM-DD HH:mm:ss'),
+        iso: nowUtc.toISOString(),
+        unix: nowUtc.unix()
+      };
 
       return res.status(200).json(cachedResponse);
     }
 
-    // Fetch fresh data
     const data = await fetchRobloxStatus(tz);
-
-    // Update cache
     cache = data;
     cacheTime = now;
 
@@ -261,10 +208,8 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('Handler error:', error);
 
-    const statusCode = error.message.includes('timeout') ? 504 : 502;
-    
-    return res.status(statusCode).json({
-      error: statusCode === 504 ? 'GATEWAY_TIMEOUT' : 'BAD_GATEWAY',
+    return res.status(502).json({
+      error: 'BAD_GATEWAY',
       message: error.message,
       timestamp: new Date().toISOString()
     });
