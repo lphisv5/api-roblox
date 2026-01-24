@@ -1,58 +1,7 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/**/*.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/api/$1"
-    },
-    {
-      "src": "/",
-      "dest": "/api/index.js"
-    }
-  ],
   "functions": {
     "api/status.js": {
-      "maxDuration": 10,
-      "memory": 1024
-    },
-    "api/health.js": {
-      "maxDuration": 5,
-      "memory": 128
+      "maxDuration": 10
     }
-  },
-  "headers": [
-    {
-      "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "s-maxage=60, stale-while-revalidate=30"
-        },
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, OPTIONS"
-        }
-      ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/status",
-      "destination": "/api/status"
-    },
-    {
-      "source": "/health",
-      "destination": "/api/health"
-    }
-  ]
+  }
 }
