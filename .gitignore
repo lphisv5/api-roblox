@@ -1,16 +1,4 @@
-# Dependencies
-node_modules/
-
-# Vercel
+node_modules
 .vercel
 .env*.local
-
-# Logs
 *.log
-npm-debug.log*
-
-# IDE
-.DS_Store
-.idea/
-.vscode/
-*.swp
