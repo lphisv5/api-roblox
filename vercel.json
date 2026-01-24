@@ -1,7 +1,13 @@
 {
   "functions": {
-    "api/status.js": {
+    "api/**/*.js": {
       "maxDuration": 10
     }
-  }
+  },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/status"
+    }
+  ]
 }
