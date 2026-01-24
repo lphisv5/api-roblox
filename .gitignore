@@ -1,4 +1,23 @@
+# Dependencies
 node_modules
+
+# Vercel
 .vercel
-.env*.local
+
+# Environment variables
+.env*
+!.env.example
+
+# Logs
 *.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Build output
+.next
+dist
+coverage
