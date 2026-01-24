@@ -5,22 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vercel dev",
-    "build": "echo 'No build step required'",
     "deploy": "vercel --prod"
   },
-  "keywords": [
-    "roblox",
-    "status",
-    "api",
-    "monitoring",
-    "vercel",
-    "serverless"
-  ],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
     "axios": "^1.6.7",
-    "axios-retry": "^4.0.0",
     "cheerio": "^1.0.0-rc.12",
     "dayjs": "^1.11.10"
   },
