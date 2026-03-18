@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "functions": {
     "api/**/*.js": {
       "maxDuration": 10
@@ -6,8 +7,24 @@
   },
   "routes": [
     {
+      "src": "/api/health",
+      "dest": "/api/health.js"
+    },
+    {
+      "src": "/api/status",
+      "dest": "/api/status.js"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/api/status"
+      "dest": "/api/index.js"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" }
+      ]
     }
   ]
 }
